@@ -1,0 +1,17 @@
+# @package _global_
+
+# I DONT THINK THIS GETS USED
+data:
+  znear: 1
+  zfar: 100.0
+  category: hands
+  dataset_type: MIRAGE
+  with_background: false
+  white_background: true
+  depth_rendering: false
+  ray_embedding: false
+  random_background_color: false 
+  training_resolution: 256
+  num_training_images: 51
+  cropped: false
+
