@@ -2,9 +2,11 @@ import os
 from typing import Dict
 from yacs.config import CfgNode as CN
 
-CACHE_DIR = os.path.join('/path/to/unzipped/weights/', ".cache") # CHANGE TO YOUR PATH WITH PRETRAINED HAMER WEIGHTS
+#CACHE_DIR = os.path.join('/path/to/unzipped/weights/', ".cache") # CHANGE TO YOUR PATH WITH PRETRAINED HAMER WEIGHTS
+CACHE_DIR = os.path.join('/graphics/scratch2/students/perrettde/MODELS/GausHamer/', ".cache")
 CACHE_DIR_HAMER = os.path.join(CACHE_DIR, "HaMeR") # RENAME
 DEFAULT_CHECKPOINT = f'{CACHE_DIR_HAMER}/hamer_ckpts/checkpoints/hamer.ckpt'
+
 
 def to_lower(x: Dict) -> Dict:
     """

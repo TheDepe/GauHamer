@@ -262,49 +262,89 @@ def save_ply(gaussians, path):
 
 
 
-def batch_rot2aa(
-    Rs: Tensor, epsilon: float = 1e-7
-) -> Tensor:
-    """
-    Rs is B x 3 x 3
-    void cMathUtil::RotMatToAxisAngle(const tMatrix& mat, tVector& out_axis,
-                                      double& out_theta)
-    {
-        double c = 0.5 * (mat(0, 0) + mat(1, 1) + mat(2, 2) - 1);
-        c = cMathUtil::Clamp(c, -1.0, 1.0);
+def batch_rotmat_to_aa(rot_mats, epsilon: float = 1e-8):
+    '''
+    Converts a batch of rotation matrices to axis-angle representation.
+    
+    Parameters
+    ----------
+    rot_mats: torch.tensor Nx3x3
+        Batch of rotation matrices
+    epsilon: float, optional
+        Small value to avoid division by zero and numerical issues
+    
+    Returns
+    -------
+    rot_vecs: torch.tensor Nx3
+        Batch of axis-angle vectors
+    '''
+    batch_size = rot_mats.shape[0]
+    device, dtype = rot_mats.device, rot_mats.dtype
 
-        out_theta = std::acos(c);
+    # Trace of the rotation matrix
+    trace = torch.sum(torch.diagonal(rot_mats, dim1=1, dim2=2), dim=1)
+    trace = trace.clamp(-1 + epsilon, 3 - epsilon)  # Avoid numerical instability
 
-        if (std::abs(out_theta) < 0.00001)
-        {
-            out_axis = tVector(0, 0, 1, 0);
-        }
-        else
-        {
-            double m21 = mat(2, 1) - mat(1, 2);
-            double m02 = mat(0, 2) - mat(2, 0);
-            double m10 = mat(1, 0) - mat(0, 1);
-            double denom = std::sqrt(m21 * m21 + m02 * m02 + m10 * m10);
-            out_axis[0] = m21 / denom;
-            out_axis[1] = m02 / denom;
-            out_axis[2] = m10 / denom;
-            out_axis[3] = 0;
-        }
-    }
-    """
+    # Calculate the angle from the trace
+    angle = torch.acos((trace - 1) / 2)  # Shape: [N]
 
-    cos = 0.5 * (torch.einsum('bii->b', [Rs]) - 1)
-    cos = torch.clamp(cos, -1 + epsilon, 1 - epsilon)
+    # Handle near-zero rotation angle (identity matrix)
+    near_zero = angle.abs() < epsilon
+    rot_vecs = torch.zeros((batch_size, 3), device=device, dtype=dtype)
+    
+    # Skew-symmetric matrix components
+    rx = rot_mats[:, 2, 1] - rot_mats[:, 1, 2]
+    ry = rot_mats[:, 0, 2] - rot_mats[:, 2, 0]
+    rz = rot_mats[:, 1, 0] - rot_mats[:, 0, 1]
+    
+    # Stack the skew components into the axis vectors
+    axis = torch.stack([rx, ry, rz], dim=1)  # Shape: [N, 3]
+    
+    # Normalize the axis vectors
+    axis_norm = torch.norm(axis, dim=1, keepdim=True) + epsilon
+    axis = axis / axis_norm
 
-    theta = torch.acos(cos)
+    # Handle cases where the angle is near zero
+    # Avoid division by zero; fall back to zero axis in those cases
+    axis[near_zero] = torch.zeros(3, device=device, dtype=dtype)
+    
+    # Compute the axis-angle representation
+    rot_vecs = axis * angle.unsqueeze(-1)  # Shape: [N, 3]
+    
+    return rot_vecs
 
-    m21 = Rs[:, 2, 1] - Rs[:, 1, 2]
-    m02 = Rs[:, 0, 2] - Rs[:, 2, 0]
-    m10 = Rs[:, 1, 0] - Rs[:, 0, 1]
-    denom = torch.sqrt(m21 * m21 + m02 * m02 + m10 * m10 + epsilon)
+def batch_rodrigues(
+    rot_vecs,
+    epsilon: float = 1e-8,
+):
+    ''' Calculates the rotation matrices for a batch of rotation vectors
+        Parameters
+        ----------
+        rot_vecs: torch.tensor Nx3
+            array of N axis-angle vectors
+        Returns
+        -------
+        R: torch.tensor Nx3x3
+            The rotation matrices for the given axis-angle parameters
+    '''
 
-    axis0 = torch.where(torch.abs(theta) < 0.00001, m21, m21 / denom)
-    axis1 = torch.where(torch.abs(theta) < 0.00001, m02, m02 / denom)
-    axis2 = torch.where(torch.abs(theta) < 0.00001, m10, m10 / denom)
+    batch_size = rot_vecs.shape[0]
+    device, dtype = rot_vecs.device, rot_vecs.dtype
 
-    return theta.unsqueeze(1) * torch.stack([axis0, axis1, axis2], 1)
+    angle = torch.norm(rot_vecs + 1e-8, dim=1, keepdim=True)
+    rot_dir = rot_vecs / angle
+
+    cos = torch.unsqueeze(torch.cos(angle), dim=1)
+    sin = torch.unsqueeze(torch.sin(angle), dim=1)
+
+    # Bx1 arrays
+    rx, ry, rz = torch.split(rot_dir, 1, dim=1)
+    K = torch.zeros((batch_size, 3, 3), dtype=dtype, device=device)
+
+    zeros = torch.zeros((batch_size, 1), dtype=dtype, device=device)
+    K = torch.cat([zeros, -rz, ry, rz, zeros, -rx, -ry, rx, zeros], dim=1) \
+        .view((batch_size, 3, 3))
+
+    ident = torch.eye(3, dtype=dtype, device=device).unsqueeze(dim=0)
+    rot_mat = ident + sin * K + (1 - cos) * torch.bmm(K, K)
+    return rot_mat

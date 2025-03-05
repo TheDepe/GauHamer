@@ -33,7 +33,7 @@ class HAMER(pl.LightningModule):
         self.backbone = create_backbone(cfg)
         if cfg.MODEL.BACKBONE.get('PRETRAINED_WEIGHTS', None):
             log.info(f'Loading backbone weights from {cfg.MODEL.BACKBONE.PRETRAINED_WEIGHTS}')
-            self.backbone.load_state_dict(torch.load(cfg.MODEL.BACKBONE.PRETRAINED_WEIGHTS, map_location='cpu')['state_dict'])
+            self.backbone.load_state_dict(torch.load(cfg.MODEL.BACKBONE.PRETRAINED_WEIGHTS, map_location='cpu')['state_dict']) # ERROR HERE
 
         # Create MANO head
         self.mano_head = build_mano_head(cfg)
@@ -49,6 +49,8 @@ class HAMER(pl.LightningModule):
 
         # Instantiate MANO model
         mano_cfg = {k.lower(): v for k,v in dict(cfg.MANO).items()}
+
+        #print(f"init mano with {mano_cfg}")
         self.mano = MANO(**mano_cfg)
 
         # Buffer that shows whetheer we need to initialize ActNorm layers

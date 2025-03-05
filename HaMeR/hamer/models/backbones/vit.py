@@ -11,7 +11,7 @@ from timm.models.layers import drop_path, to_2tuple, trunc_normal_
 
 def vit(cfg):
     return ViT(
-                img_size=(256, 192), # CHANGE HERE
+                img_size=(256, 192),
                 patch_size=16,
                 embed_dim=1280,
                 depth=32,

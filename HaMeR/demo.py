@@ -13,7 +13,7 @@ from hamer.utils.renderer import Renderer, cam_crop_to_full
 
 LIGHT_BLUE=(0.65098039,  0.74117647,  0.85882353)
 
-from vitpose_model import ViTPoseModel
+#from vitpose_model import ViTPoseModel
 
 import json
 from typing import Dict, Optional
@@ -21,15 +21,15 @@ from typing import Dict, Optional
 def main():
     parser = argparse.ArgumentParser(description='HaMeR demo code')
     parser.add_argument('--checkpoint', type=str, default=DEFAULT_CHECKPOINT, help='Path to pretrained model checkpoint')
-    parser.add_argument('--img_folder', type=str, default='images', help='Folder with input images')
+    parser.add_argument('--img_folder', type=str, default='example_data', help='Folder with input images')
     parser.add_argument('--out_folder', type=str, default='out_demo', help='Output folder to save rendered results')
     parser.add_argument('--side_view', dest='side_view', action='store_true', default=False, help='If set, render side view also')
     parser.add_argument('--full_frame', dest='full_frame', action='store_true', default=True, help='If set, render all people together also')
     parser.add_argument('--save_mesh', dest='save_mesh', action='store_true', default=False, help='If set, save meshes to disk also')
     parser.add_argument('--batch_size', type=int, default=1, help='Batch size for inference/fitting')
     parser.add_argument('--rescale_factor', type=float, default=2.0, help='Factor for padding the bbox')
-    parser.add_argument('--body_detector', type=str, default='vitdet', choices=['vitdet', 'regnety'], help='Using regnety improves runtime and reduces memory')
-    parser.add_argument('--file_type', nargs='+', default=['*.jpg', '*.png'], help='List of file extensions to consider')
+    parser.add_argument('--body_detector', type=str, default='regnety', choices=['vitdet', 'regnety'], help='Using regnety improves runtime and reduces memory')
+    parser.add_argument('--file_type', nargs='+', default=['*.jpg', '*.png',"*.webp"], help='List of file extensions to consider')
 
     args = parser.parse_args()
 
@@ -62,8 +62,9 @@ def main():
         detector       = DefaultPredictor_Lazy(detectron2_cfg)
 
     # keypoint detector
-    cpm = ViTPoseModel(device)
-
+    print("HERER1`")
+    #cpm = ViTPoseModel(device)
+    print("HERE2")
     # Setup the renderer
     renderer = Renderer(model_cfg, faces=model.mano.faces)
 
@@ -72,9 +73,10 @@ def main():
     
     # Get all demo images ends with .jpg or .png
     img_paths = [img for end in args.file_type for img in Path(args.img_folder).glob(end)]
-
+    print(img_paths)
     # Iterate over all images in folder
     for img_path in img_paths:
+        print("Reafding imga")
         img_cv2 = cv2.imread(str(img_path))
 
         # Detect humans in image
@@ -87,39 +89,41 @@ def main():
         pred_scores=det_instances.scores[valid_idx].cpu().numpy()
 
         # Detect human keypoints for each person
-        vitposes_out = cpm.predict_pose(
-            img,
-            [np.concatenate([pred_bboxes, pred_scores[:, None]], axis=1)],
-        )
+        # vitposes_out = cpm.predict_pose(
+        #     img,
+        #     [np.concatenate([pred_bboxes, pred_scores[:, None]], axis=1)],
+        # )
 
-        bboxes = []
-        is_right = []
+        # bboxes = []
+        # is_right = []
 
-        # Use hands based on hand keypoint detections
-        for vitposes in vitposes_out:
-            left_hand_keyp = vitposes['keypoints'][-42:-21]
-            right_hand_keyp = vitposes['keypoints'][-21:]
+        # # Use hands based on hand keypoint detections
+        # for vitposes in vitposes_out:
+        #     left_hand_keyp = vitposes['keypoints'][-42:-21]
+        #     right_hand_keyp = vitposes['keypoints'][-21:]
 
-            # Rejecting not confident detections
-            keyp = left_hand_keyp
-            valid = keyp[:,2] > 0.5
-            if sum(valid) > 3:
-                bbox = [keyp[valid,0].min(), keyp[valid,1].min(), keyp[valid,0].max(), keyp[valid,1].max()]
-                bboxes.append(bbox)
-                is_right.append(0)
-            keyp = right_hand_keyp
-            valid = keyp[:,2] > 0.5
-            if sum(valid) > 3:
-                bbox = [keyp[valid,0].min(), keyp[valid,1].min(), keyp[valid,0].max(), keyp[valid,1].max()]
-                bboxes.append(bbox)
-                is_right.append(1)
+        #     # Rejecting not confident detections
+        #     keyp = left_hand_keyp
+        #     valid = keyp[:,2] > 0.5
+        #     if sum(valid) > 3:
+        #         bbox = [keyp[valid,0].min(), keyp[valid,1].min(), keyp[valid,0].max(), keyp[valid,1].max()]
+        #         bboxes.append(bbox)
+        #         is_right.append(0)
+        #     keyp = right_hand_keyp
+        #     valid = keyp[:,2] > 0.5
+        #     if sum(valid) > 3:
+        #         bbox = [keyp[valid,0].min(), keyp[valid,1].min(), keyp[valid,0].max(), keyp[valid,1].max()]
+        #         bboxes.append(bbox)
+        #         is_right.append(1)
 
-        if len(bboxes) == 0:
-            print("Didn't find any hands...")
-            continue
+        # if len(bboxes) == 0:
+        #     print("Didn't find any hands...")
+        #     continue
 
-        boxes = np.stack(bboxes)
-        right = np.stack(is_right) # 
+        boxes = np.stack(pred_bboxes)*2
+        #right = np.stack(is_right) # 
+        print(boxes.shape)
+        right = np.array([1,1])
 
         # Run reconstruction on all detected hands
         dataset = ViTDetDataset(model_cfg, img_cv2, boxes, right, rescale_factor=args.rescale_factor)

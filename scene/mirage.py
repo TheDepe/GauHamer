@@ -22,11 +22,9 @@ from utils.general_utils import PILtoTorch, PILtoTorchHMR, matrix_to_quaternion
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getView2World, fov2focal
 from utils.manus_cam_utils import read_params, get_intr, get_extr, get_undistort_params, get_opengl_camera_attributes
 
-MIRAGE_DATASET_ROOT = '' # Change this to your data directory
+MIRAGE_DATASET_ROOT = '/home/perrettde/Documents/thesis/DATA/mirage_renders/newest_renders/' # Change this to your data directory
 assert MIRAGE_DATASET_ROOT is not None, "Update the location of the MIRAGE Dataset"
-MANO_DIR='.../models/' # Change this to directory containing MANO_RIGHT.pkl
-
-
+MANO_DIR='/home/perrettde/Documents/thesis/DATA/SMLP_MANO/models/'
 
 
 @dataclass
@@ -114,16 +112,22 @@ class MIRAGE(Dataset):
             self.num_training_images = 4
 
         if self.overfit:
-            dataset_name = "train"
+            self.dataset_name = "overfit"
 
+        
         filename = "train.txt" if self.dataset_name == "train" else "test.txt"
 
+        filename = "train_overfit.txt" if self.dataset_name == "overfit" else filename 
+        
         with open(os.path.join(self.base_path, filename)) as file:
             self.folders = [line.rstrip() for line in file]
             
         if self.dataset_name != "train":
             self.num_training_images = cfg.data.num_test_val_images
-
+        
+        if self.dataset_name == "overfit":
+            self.num_training_images = cfg.data.num_training_images
+            
         if hasattr(self.cfg.data, "undistort"):
             self.undistort = self.cfg.data.undistort
         else:
@@ -188,7 +192,13 @@ class MIRAGE(Dataset):
                 720,
                 resize_factor=1
             )
+            # Match rotation/coord system of cameras with rotation of mano
+            cam_rotation = np.array([[-1., -0., -0.,  0.],
+                            [ 0., -0.,  1.,  0.],
+                            [-0.,  1.,  0.,  0.],
+                            [ 0.,  0.,  0.,  1.]])
             
+            extr = np.linalg.inv(cam_rotation @ np.linalg.inv(extr))
             parsed_cameras[camera_id] = {
                 "extrins": extr,
                 "intrins": intr,
@@ -212,7 +222,7 @@ class MIRAGE(Dataset):
             images_info = []
             for i, perspective in enumerate(cam_folders):
                 cam_id = perspective.split(os.sep)[-1]
-                metadata = False
+                metadata = True
                 if metadata:
                     mano_params_path = os.path.join(self.base_path, folder, 'metadata.json')
                     with open(mano_params_path, 'r') as f:
@@ -234,6 +244,8 @@ class MIRAGE(Dataset):
                         "betas": betas,
                         "transl": transl
                     }
+                else:
+                    mano_params = None
                 
                 ## compute SMPL vertices in the world coordinate system
                 #output = self.mano(
@@ -262,8 +274,8 @@ class MIRAGE(Dataset):
             
             # Append each scene.
             #items.append((images_info, joints_3d, object_id, mano_params)) 
-            #items.append((images_info, None, object_id, mano_params))
-            items.append((images_info, None, object_id, None))
+            items.append((images_info, None, object_id, mano_params))
+            #items.append((images_info, None, object_id, None))
 
         return items
 
@@ -418,6 +430,8 @@ class MIRAGE(Dataset):
         crop_infos = torch.stack(crop_infos)
         #sherf_masks =  torch.stack(sherf_masks)
 
+        # for cam, loc in zip(cam_ids, all_focals_pixels):
+        #     print(f"Cam {cam} is at {loc}")
         ret = {
             "gt_images": all_rgbs,
             "world_view_transforms": all_world_view_transforms,

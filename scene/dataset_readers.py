@@ -364,7 +364,7 @@ def readCamerasInfosMIRAGE(rgb_paths, poses, intrins, distcoeff, camera_idx, ran
             mask = mask[:, :, None]
 
         image = np.where(mask, image, random_color)
-
+        tight_crop=True
         image, mask, (h_min, w_min, crop_size) = crop_cmu_image(image, mask, cx, cy, tight_crop=tight_crop) #tight_crop = false
         
         cx = cx - w_min

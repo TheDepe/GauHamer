@@ -23,6 +23,7 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision.utils import save_image
 
+
 from PIL import Image, ImageDraw, ImageFont
 
 from omegaconf import DictConfig, OmegaConf
@@ -30,7 +31,7 @@ from omegaconf import DictConfig, OmegaConf
 from scene.hamer_extension import load_hamer_predictor
 from scene.dataset_factory import get_dataset
 
-from utils.general_utils import safe_state, batch_rot2aa
+from utils.general_utils import safe_state, batch_rotmat_to_aa, batch_rodrigues, save_ply
 from utils.loss_utils import l1_loss, l2_loss, dice_loss
 from utils.camera_utils import get_extra_cameras_for_batch
 import lpips as lpips_lib
@@ -71,7 +72,7 @@ def main(cfg: DictConfig):
     os.makedirs(output_dir, exist_ok=True)
     
     
-    WARMUP_PHASE = 10_000
+    WARMUP_PHASE = 0
     
     
     dict_cfg = OmegaConf.to_container(
@@ -204,30 +205,41 @@ def main(cfg: DictConfig):
             dataloader_iterator = MyIterator(iter(dataloader))
             data = next(dataloader_iterator)
                 
+        # Move data to the specified device
         data = {k: v.to(device) for k, v in data.items()}
 
+        # Extract relevant data from the dataset
         rot_transform_quats = data["source_cv2wT_quat"][:, :cfg.data.input_images]
-
         focals_pixels_pred = data["focals_pixels"][:, :cfg.data.input_images, ...]
         pps_pixels_pred = data["pps_pixels"][:, :cfg.data.input_images, ...]
-        
         input_images = data["gt_images"][:, :cfg.data.input_images, ...]
+
+        # ALL CORRECT
+        # print(f"DEBUG || focals {focals_pixels_pred[0,0]}")
+        # print(f"DEBUG || rot_transform_quats {rot_transform_quats[0,0]}")
+        # print(f"DEBUG || pps_pixels_pred {pps_pixels_pred[0,0]}")
+        # print(f"DEBUG || world_view_transforms {data['world_view_transforms'][0,0]}")
+        # print(f"DEBUG || full_proj_transforms {data['full_proj_transforms'][0,0]}")
+        # print(f"DEBUG || camera_centers {data['camera_centers'][0,0]}")
         
-        # mano_params is dict
         gaussian_splats, mano_params = gaussian_predictor(
-            input_images,
-            data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
-            rot_transform_quats,
-            focals_pixels_pred,
-            pps_pixels_pred
+            x = input_images,
+            source_cameras_view_to_world = data["view_to_world_transforms"][:, :cfg.data.input_images, ...], # shape 1,1,4,4
+            #source_cameras_view_to_world = None,
+            source_cv2wT_quat = rot_transform_quats,
+            focals_pixels = focals_pixels_pred,
+            pps_pixels = pps_pixels_pred
             )
-        
+        # DIFFERENT .16
+        #print(f"DEBUG || mano mean {gaussian_splats['xyz'].mean()}")
+        # can be used as loss
+        #print(f"DEBUG || GT GO: {data['global_orient']}, PRED GO: {batch_rotmat_to_aa(ctw3x3.T @ mano_params['pred_mano_params']['global_orient'].squeeze(0))}")
         # regularize very big gaussians
-        if len(torch.where(gaussian_splats["scaling"] > 1)[0]) > 0:
+        if len(torch.where(gaussian_splats["scaling"] > .5)[0]) > 0:
             big_gaussian_reg_loss = torch.mean(
-                gaussian_splats["scaling"][torch.where(gaussian_splats["scaling"] > 20)] * 0.1)
+                gaussian_splats["scaling"][torch.where(gaussian_splats["scaling"] > .5)] * 0.1)
             print('Regularising {} big Gaussians on iteration {}'.format(
-                len(torch.where(gaussian_splats["scaling"] > 1)[0]), iteration))
+                len(torch.where(gaussian_splats["scaling"] > .5)[0]), iteration))
         else:
             big_gaussian_reg_loss = 0.0
         # regularize very small Gaussians
@@ -289,6 +301,8 @@ def main(cfg: DictConfig):
         gt_masks_train = torch.stack(gt_masks_train, dim=0)
         
         
+        #save_ply(gaussians=gaussian_splat_batch, path= os.path.join(vis_dir, f"pcd_{iteration}.ply"))
+        #print("Saved ply to ", os.path.join(vis_dir, f"pcd_{iteration}.ply"))
         
         # ===============================
         # Loss calculation
@@ -296,7 +310,7 @@ def main(cfg: DictConfig):
             
         # Add location loss
         actual_location = gaussian_splats['xyz'].mean(1)
-        target_location = torch.tensor([[0.5,0.5,0.5]]).to(actual_location.device)
+        target_location = torch.tensor([[-0.5,0.5,0.5]]).to(actual_location.device)
         location_loss = l2_loss(target_location, actual_location)
         warmup_lambda = 0.5 if iteration < (WARMUP_PHASE) else 0.05
         total_loss = location_loss * warmup_lambda     
@@ -315,7 +329,7 @@ def main(cfg: DictConfig):
         
             if cfg.opt.lambda_lpips != 0 and iteration > cfg.opt.start_lpips_after:
                 lpips_loss_sum = torch.mean(
-                    lpips_fn(rendered_images * 2 - 1, gt_images * 2 - 1),
+                    lpips_fn(rendered_images_train * 2 - 1, gt_images_train * 2 - 1),
                     )
         
             total_loss += l12_loss_sum * lambda_l12
@@ -423,114 +437,7 @@ def main(cfg: DictConfig):
                 wandb.log({"render_alpha": wandb.Video(render_mask, fps=1, format="mp4")}, step=iteration)
                 wandb.log({"gt_alpha": wandb.Video(gt_alpha, fps=1, format="mp4")}, step=iteration)
             
-            if iteration % cfg.logging.loop_log == 0 or iteration == 1:
-                vis_data = next(iter(test_dataloader))
-                vis_data = {k: v.to(device) for k, v in vis_data.items()}
 
-                rot_transform_quats = vis_data["source_cv2wT_quat"][:, :cfg.data.input_images]
-
-                focals_pixels_pred = vis_data["focals_pixels"][:, :cfg.data.input_images, ...]
-               
-                pps_pixels_pred = vis_data["pps_pixels"][:, :cfg.data.input_images, ...]
-                
-                input_images = vis_data["gt_images"][:, :cfg.data.input_images, ...]
-
-                try:    
-                    proj_matrix = test_dataset.projection_matrix
-                except:
-                    proj_matrix = test_dataset.datasets[0].projection_matrix
-                extra_cams_loop = get_extra_cameras_for_batch(
-                    batch_data=vis_data, 
-                    projection_matrix=proj_matrix,
-                    mode="loop",
-                    num_cameras=60,
-                    radius=3
-                )
-
-                extra_cams_loop = {k: v.to(device) for k, v in extra_cams_loop.items()}
-            
-                gaussian_splats_vis, _ = gaussian_predictor(
-                        input_images,
-                        vis_data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
-                                                    rot_transform_quats,
-                                                    focals_pixels_pred,
-                                                    pps_pixels_pred)
-
-                # Render
-                rendered_images = []
-                rendered_alphas = []
-                gt_images = []
-                gt_masks = []
-                for b_idx in range(vis_data["gt_images"].shape[0]):
-                    # image at index 0 is training, remaining images are targets
-                    # Rendering is done sequentially because gaussian rasterization code
-                    # does not support batching
-                    gaussian_splat_batch = {k: v[b_idx].contiguous() for k, v in gaussian_splats_vis.items()}
-                    for r_idx in range(cfg.data.input_images, vis_data["gt_images"].shape[1]):
-                        if "focals_pixels" in vis_data.keys():
-                            focals_pixels_render = vis_data["focals_pixels"][b_idx, r_idx].cpu()
-                        else:
-                            focals_pixels_render = None
-                        if "background_color" in vis_data.keys():
-                                background_color = vis_data["background_color"][b_idx, r_idx]
-                        else:
-                            background_color = background
-                        render_out = render_predicted(gaussian_splat_batch, 
-                                            vis_data["world_view_transforms"][b_idx, r_idx],
-                                            vis_data["full_proj_transforms"][b_idx, r_idx],
-                                            vis_data["camera_centers"][b_idx, r_idx],
-                                            background_color,
-                                            cfg,
-                                            focals_pixels=focals_pixels_render)
-                        image = render_out["render"]
-                        alpha = render_out["alpha"]
-                        # Put in a list for a later loss computation
-                        rendered_images.append(image)
-                        rendered_alphas.append(alpha)
-                        gt_image = vis_data["gt_images"][b_idx, r_idx]
-                        gt_images.append(gt_image)
-                        gt_mask = vis_data["gt_masks"][b_idx, r_idx]
-                        gt_masks.append(gt_mask)
-                rendered_images = torch.stack(rendered_images, dim=0)
-                rendered_alphas = torch.stack(rendered_alphas, dim=0)
-                gt_images = torch.stack(gt_images, dim=0)
-                gt_masks = torch.stack(gt_masks, dim=0)
-                render_all = np.asarray([(np.clip(im.detach().cpu().numpy(), 0, 1)*255).astype(np.uint8) for im in rendered_images])
-                gt_all = np.asarray([(np.clip(im.detach().cpu().numpy(), 0, 1)*255).astype(np.uint8) for im in gt_images])
-                wandb.log({"render_all_val": wandb.Video(render_all, fps=1, format="mp4")}, step=iteration)
-                wandb.log({"gt_all_val": wandb.Video(gt_all, fps=1, format="mp4")}, step=iteration)
-                render_mask = np.asarray([(np.clip(im.detach().cpu().numpy(), 0, 1)*255).astype(np.uint8) for im in rendered_alphas.repeat(1, 3, 1, 1)])
-                gt_alpha = np.asarray([(np.clip(im.detach().cpu().numpy(), 0, 1)*255).astype(np.uint8) for im in gt_masks.unsqueeze(1).repeat(1, 3, 1, 1)])
-                wandb.log({"render_alpha_val": wandb.Video(render_mask, fps=1, format="mp4")}, step=iteration)
-                wandb.log({"gt_alpha_val": wandb.Video(gt_alpha, fps=1, format="mp4")}, step=iteration)
-
-                test_loop = []
-                for r_idx in range(extra_cams_loop["world_view_transforms"].shape[1]):
-                    # We don't change the input or output of the network, just the rendering cameras
-                    if "focals_pixels" in vis_data.keys():
-                        focals_pixels_render = vis_data["focals_pixels"][0, 0]
-                    else:
-                        focals_pixels_render = None
-                    if "background_color" in vis_data.keys():
-                        background_color = vis_data["background_color"][0, 0]
-                    else:
-                        background_color = background
-                    test_image = render_predicted({k: v[0].contiguous() for k, v in gaussian_splats_vis.items()}, 
-                                         extra_cams_loop["world_view_transforms"][0, r_idx], 
-                                         extra_cams_loop["full_proj_transforms"][0, r_idx], 
-                                         extra_cams_loop["camera_centers"][0, r_idx],
-                                         background_color,
-                                         cfg,
-                                         focals_pixels=focals_pixels_render)["render"]
-                    test_loop.append((np.clip(test_image.detach().cpu().numpy(), 0, 1)*255).astype(np.uint8))
-              
-    
-                wandb.log({"test_loop": wandb.Video(np.asarray(test_loop), fps=5, format="mp4")},
-                    step=iteration)
-                in_image = [(np.clip(vis_data["gt_images"][0, 1].detach().cpu().numpy(), 0, 1)*255).astype(np.uint8)]
-                wandb.log({"test_loop_input": wandb.Video(np.asarray(in_image), fps=5, format="mp4")},
-                    step=iteration)
-                
 
         fnames_to_save = []
         # Find out which models to save

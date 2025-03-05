@@ -8,13 +8,16 @@ import einops
 from utils.general_utils import quaternion_raw_multiply
 import math
 from torchvision.transforms.functional import resize
+from utils.general_utils import batch_rotmat_to_aa
 
 
+#CACHE_DIR = os.path.join('/path/to/unzipped/weights/', ".cache") # CHANGE TO YOUR PATH WITH PRETRAINED HAMER WEIGHTS
+#CACHE_DIR_HAMER = os.path.join(CACHE_DIR, "HaMeR") # RENAME
+#DEFAULT_CHECKPOINT = f'{CACHE_DIR_HAMER}/hamer_ckpts/checkpoints/hamer.ckpt'
 
-CACHE_DIR = os.path.join('/path/to/unzipped/weights/', ".cache") # CHANGE TO YOUR PATH WITH PRETRAINED HAMER WEIGHTS
+CACHE_DIR = os.path.join('/graphics/scratch2/students/perrettde/MODELS/GausHamer/', ".cache")
 CACHE_DIR_HAMER = os.path.join(CACHE_DIR, "HaMeR") # RENAME
 DEFAULT_CHECKPOINT = f'{CACHE_DIR_HAMER}/hamer_ckpts/checkpoints/hamer.ckpt'
-
 
 class GaussiansHead(MANOTransformerDecoderHead):
     """ This just extends the based MANOTransformerDecoderHead from HAMER.
@@ -24,10 +27,7 @@ class GaussiansHead(MANOTransformerDecoderHead):
             Mano params (pose, betas)
             Cam
         Extended Output:
-            Gaussian Features
-        
-    
-    
+            Gaussian Features    
     """
     def __init__(self, cfg, mano_cfg):
         super().__init__(mano_cfg)
@@ -157,9 +157,6 @@ class GaussianHaMeR(HAMER):
 
         # Store useful regression outputs to the output dict
         output['pred_mano_params'] = {k: v.clone() for k,v in output["pred_mano_params"].items()}
-        # output['pred_features'] = pred_features
-        
-
         # Mano params are pose, global orient and betas. NO TRANSLATION
         mano_output = self.mano(**{k: v.float() for k,v in output["pred_mano_params"].items()}, pose2rot=False)
         pred_keypoints_3d = mano_output.joints
@@ -181,7 +178,7 @@ class GaussianHaMeRPredictor(nn.Module):
         self.openpose_vertices = [1, 0, 8, 5, 6, 7, 12, 13, 14, 2, 3, 4, 9, 10, 11, 16, 18, 15, 17]
     
     def forward(self, x, 
-                source_cameras_view_to_world, 
+                source_cameras_view_to_world=None, 
                 source_cv2wT_quat=None,
                 focals_pixels=None,
                 pps_pixels=None):
@@ -193,42 +190,56 @@ class GaussianHaMeRPredictor(nn.Module):
         predictions = self.network({"img": x.squeeze(1)})
 
         focals = focals_pixels.clone()[:, 0, 0]
-        
-        vertices = predictions["pred_vertices"].clone()
+
+        vertices = predictions["pred_vertices"].clone() # These key points are located correctly in 3D space (as per MANO output)
         out_cam = predictions["pred_cam"].clone()
         keypoints_3d = predictions["pred_keypoints_3d"].clone()
         
+        # DIFFERENT [12.6655, -0.0399,  0.0318]
+        #print("outcam", out_cam)
         pred_cam_t = torch.stack(
             [
                 out_cam[:, 1], # x axis
                 out_cam[:, 2], # y axis
                 2*focals/(self.cfg.data.training_resolution * out_cam[:, 0] + 1e-9) # depth / z axis
             ],dim=-1)
-
+        # DIFFERENT: [-0.0399,  0.0318,  0.6916]
+        #print(f"DEBUG || cam out {pred_cam_t}")
         vertices = vertices + pred_cam_t.unsqueeze(1) # shift to location infront of camera
         
         # adjust for principal points and normalise by focal length
         vertices[:, :, 0] = vertices[:, :, 0] - (vertices[:, :, 2, None] * (pps_pixels[:, 0, 0] / focals)[:, None, None])[:, :, 0] 
         vertices[:, :, 1] = vertices[:, :, 1] - (vertices[:, :, 2, None] * (pps_pixels[:, 0, 1] / focals)[:, None, None])[:, :, 0]
-        
         keypoints_3d = keypoints_3d + pred_cam_t.unsqueeze(1)
         keypoints_3d[:, :, 0] = keypoints_3d[:, :, 0] - (keypoints_3d[:, :, 2, None] * (pps_pixels[:, 0, 0] / focals)[:, None, None])[:, :, 0]
         keypoints_3d[:, :, 1] = keypoints_3d[:, :, 1] - (keypoints_3d[:, :, 2, None] * (pps_pixels[:, 0, 1] / focals)[:, None, None])[:, :, 0]
 
         # transform into world coordinates.
         vertices = torch.cat((vertices, torch.ones_like(vertices[:, :, 0:1])), dim=-1)
-        vertices = torch.bmm(vertices, source_cameras_view_to_world.squeeze(1))
+        #vertices = torch.bmm(vertices, source_cameras_view_to_world.squeeze(1)) # Unnecessary
+        # MANO verts are already in 3d space
+        
+        if source_cameras_view_to_world is not None:
+            vertices = torch.bmm(vertices, source_cameras_view_to_world.squeeze(1))
+        else:
+            vertices = torch.bmm(vertices, torch.eye(4).unsqueeze(0).to(vertices.device))
+            
         vertices = vertices[:, :, :3] 
         vertices = vertices.repeat_interleave(self.network.mano_head.gaussians_per_vertex, dim=1)
+        #vertices = vertices - vertices.mean(1) + torch.tensor([[-0.5,0.5,0.5]]).to(vertices.device)
         
         keypoints_3d = torch.cat((keypoints_3d, torch.ones_like(keypoints_3d[:, :, 0:1])), dim=-1)
-        keypoints_3d = torch.bmm(keypoints_3d, source_cameras_view_to_world.squeeze(1))
+        # MANO verts are already in 3d space
+        if source_cameras_view_to_world is not None:
+            keypoints_3d = torch.bmm(keypoints_3d, source_cameras_view_to_world.squeeze(1))
+        else:
+            keypoints_3d = torch.bmm(keypoints_3d, torch.eye(4).unsqueeze(0).to(keypoints_3d.device))
         keypoints_3d = keypoints_3d[:, :, :3] 
 
-        gaussians_output = {}        
+        gaussians_output = {}
         source_cv2wT_quat = source_cv2wT_quat.reshape(B*N_views, *source_cv2wT_quat.shape[2:])
         gaussians_output["xyz_offsets"] = predictions["xyz"].clone()
-        gaussians_output["xyz"] = vertices + predictions["xyz"]
+        gaussians_output["xyz"] = vertices + predictions["xyz"]   #*0.error here
         gaussians_output["rotation"] = self.transform_rotations(predictions["rotation"], 
                                                                 source_cv2wT_quat=source_cv2wT_quat)
         gaussians_output["opacity"] = predictions["opacity"]
