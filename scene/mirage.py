@@ -22,9 +22,9 @@ from utils.general_utils import PILtoTorch, PILtoTorchHMR, matrix_to_quaternion
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getView2World, fov2focal
 from utils.manus_cam_utils import read_params, get_intr, get_extr, get_undistort_params, get_opengl_camera_attributes
 
-MIRAGE_DATASET_ROOT = '/home/perrettde/Documents/thesis/DATA/mirage_renders/newest_renders/' # Change this to your data directory
+MIRAGE_DATASET_ROOT = '/graphics/scratch2/students/perrettde/DATA/mirage_renders/newest_renders' # Change this to your data directory
 assert MIRAGE_DATASET_ROOT is not None, "Update the location of the MIRAGE Dataset"
-MANO_DIR='/home/perrettde/Documents/thesis/DATA/SMLP_MANO/models/'
+MANO_DIR='/graphics/scratch2/students/perrettde/DATA/SMLP_MANO/models/'
 
 
 @dataclass
@@ -213,7 +213,7 @@ class MIRAGE(Dataset):
             object_id = folder.split(os.sep)[0]
             object_id = i
             
-            # contains extr as c2w
+
             parsed_cameras = self.parse_cameras(self.cam_data_path)
             cam_folders = sorted([f for f in os.listdir(os.path.join(self.base_path, folder)) 
                       if os.path.isdir(os.path.join(self.base_path, folder, f))])

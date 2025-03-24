@@ -3,7 +3,7 @@ import os
 import sys
 import tqdm
 from omegaconf import OmegaConf
-
+from scene.manus import Manus
 import lpips as lpips_lib
 
 import torch
@@ -84,7 +84,7 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis, out_folder=
 
         gt_images = []
         rendered = []
-        for r_idx in range(1, data["gt_images"].shape[1]):
+        for r_idx in range(1, data["gt_images"].shape[1],4):
             if "background_color" in data.keys():
                 background_color = data["background_color"][0, r_idx]
             else:
@@ -182,7 +182,8 @@ def main(model_path, config_path, save_vis, split='val'):
     print('Loaded model!')
 
     # instantiate dataset loader
-    dataset = get_dataset(training_cfg, split)
+    #dataset = get_dataset(training_cfg, split)
+    dataset = Manus("/graphics/scratch2/students/perrettde/Manus_Data/subject0/actions_hdf5", split="test")
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False,
                             persistent_workers=True, pin_memory=True, num_workers=10)
     
@@ -192,9 +193,9 @@ def main(model_path, config_path, save_vis, split='val'):
 
 if __name__ == "__main__":
 
-    model_path = sys.argv[1]
-    config_path = sys.argv[2]
-    save_vis = int(sys.argv[3])
+    model_path = "/graphics/scratch2/students/perrettde/results_to_keep/hand only success/model_latest_it549999.pth"# sys.argv[1]
+    config_path = "/graphics/scratch2/students/perrettde/results_to_keep/hand only success/.hydra/config.yaml"
+    save_vis = 10
     split = 'test' 
     scores = main(model_path, config_path, save_vis, split=split)
     with open("{}_scores.json".format(split), "w+") as f:

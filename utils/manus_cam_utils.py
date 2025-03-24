@@ -160,6 +160,7 @@ def get_opengl_camera_attributes(
     projection_matrix = np.transpose(
         getProjectionMatrix(znear=znear, zfar=zfar, fovX=fovx, fovY=fovy)
     )
+
     full_proj_transform = np.matmul(world_view_transform, projection_matrix)
     camera_center = np.linalg.inv(world_view_transform)[3, :3]
 

@@ -12,7 +12,8 @@ data:
   znear: 0.01
   zfar: 100.0
   category: hands
-  dataset_type: MIRAGE
+  #dataset_type: MIRAGE
+  dataset_type: MANUS
   with_background: false
   white_background: true
   depth_rendering: false
@@ -22,7 +23,7 @@ data:
   num_training_images: 15
   num_test_val_images: 50
   cropped: false
-  cam_data_path: /home/perrettde/Documents/thesis/DATA/Manus_Data/optim_params.txt
+  cam_data_path: '/graphics/scratch2/students/perrettde/DATA/Manus_Data/optim_params.txt'
 opt:
   iterations: 900001
   base_lr: 5.0e-06
